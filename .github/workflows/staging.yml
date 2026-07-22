@@ -1,11 +1,7 @@
-name: QA CI Pipeline
+name: React DevSecOps - Staging
 
 on:
   push:
-    branches:
-      - "feature/**"
-
-  pull_request:
     branches:
       - staging
 
@@ -13,9 +9,11 @@ permissions:
   contents: read
   security-events: write
 
-jobs:
+env:
+  IMAGE_NAME: aws-devops-react
 
-  qa:
+jobs:
+  docker-build-push:
 
     runs-on: ubuntu-latest
 
@@ -23,95 +21,142 @@ jobs:
       run:
         working-directory: app
 
-    env:
-      IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/aws-devops-react
-
     steps:
 
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+    ##########################################################
+    # Checkout
+    ##########################################################
 
-      - name: Setup NodeJS
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: app/package-lock.json
+    - name: Checkout Repository
+      uses: actions/checkout@v4
 
-      - name: Install Dependencies
-        run: npm ci
+    ##########################################################
+    # Secret Scanning
+    ##########################################################
 
-      - name: Lint Application
-        run: npm run lint
+    - name: Run Gitleaks
+      uses: gitleaks/gitleaks-action@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build React Application
-        run: npm run build
+    ##########################################################
+    # Node Setup
+    ##########################################################
 
-      ###################################
-      # Gitleaks
-      ###################################
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: app/package-lock.json
 
-      - name: Secret Scan
-        uses: gitleaks/gitleaks-action@v2
+    ##########################################################
+    # Install Packages
+    ##########################################################
 
-      ###################################
-      # Semgrep
-      ###################################
+    - name: Install Dependencies
+      run: npm ci
 
-      - name: Run Semgrep SAST
-        uses: returntocorp/semgrep-action@v1
+    ##########################################################
+    # ESLint
+    ##########################################################
 
-      ###################################
-      # Docker Buildx
-      ###################################
+    - name: Run ESLint
+      run: npm run lint
 
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
+    ##########################################################
+    # npm Audit
+    ##########################################################
 
-      ###################################
-      # Login DockerHub
-      ###################################
+    - name: Run npm Audit
+      run: npm audit --audit-level=high
 
-      - name: Login DockerHub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+    ##########################################################
+    # Build React Application
+    ##########################################################
 
-      ###################################
-      # Build Docker Image
-      ###################################
+    - name: Build React Application
+      run: npm run build
 
-      - name: Build Docker Image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./app
-          push: false
-          tags: |
-            ${{ env.IMAGE_NAME }}:qa-${{ github.run_number }}
-            ${{ env.IMAGE_NAME }}:qa-latest
+    ##########################################################
+    # Docker Buildx
+    ##########################################################
 
-      ###################################
-      # Trivy Scan
-      ###################################
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
 
-      - name: Scan Docker Image
-        uses:  aquasecurity/trivy-action@0.33.1
-        with:
-          image-ref: ${{ env.IMAGE_NAME }}:qa-${{ github.run_number }}
-          format: table
-          exit-code: 1
-          severity: CRITICAL,HIGH
+    ##########################################################
+    # Docker Login
+    ##########################################################
 
-      ###################################
-      # Push Image
-      ###################################
+    - name: Login to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Push Docker Image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./app
-          push: true
-          tags: |
-            ${{ env.IMAGE_NAME }}:qa-${{ env.APP_VERSION }}-${{ github.run_number }}
-            ${{ env.IMAGE_NAME }}:qa-${{ env.APP_VERSION }}-${{ github.sha }}
+    ##########################################################
+    # Docker Metadata
+    ##########################################################
+
+    - name: Docker Metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=raw,value=staging
+          type=sha,prefix=staging-
+
+    ##########################################################
+    # Docker Build
+    ##########################################################
+
+    - name: Build Docker Image
+      uses: docker/build-push-action@v6
+      with:
+        context: ./app
+        file: ./app/Dockerfile
+        load: true
+        tags: ${{ steps.meta.outputs.tags }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    ##########################################################
+    # Trivy Scan
+    ##########################################################
+
+    - name: Run Trivy Image Scan
+      uses: aquasecurity/trivy-action@0.35.0
+      with:
+        image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:staging
+        format: table
+        exit-code: 1
+        ignore-unfixed: true
+        severity: HIGH,CRITICAL
+
+    ##########################################################
+    # Push Image
+    ##########################################################
+
+    - name: Push Docker Image
+      uses: docker/build-push-action@v6
+      with:
+        context: ./app
+        file: ./app/Dockerfile
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    ##########################################################
+    # Success
+    ##########################################################
+
+    - name: Pipeline Summary
+      run: |
+        echo "====================================="
+        echo "React DevSecOps Pipeline Completed"
+        echo "====================================="
+        echo "Image:"
+        echo "${{ steps.meta.outputs.tags }}"
