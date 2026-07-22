@@ -1,4 +1,4 @@
-name: Staging CI Pipeline
+name: React DevSecOps - Staging
 
 on:
   push:
@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  security-events: write
 
 env:
   IMAGE_NAME: aws-devops-react
@@ -18,44 +19,144 @@ jobs:
 
     defaults:
       run:
-        working-directory: ./app
+        working-directory: app
 
     steps:
 
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+    ##########################################################
+    # Checkout
+    ##########################################################
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+    - name: Checkout Repository
+      uses: actions/checkout@v4
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+    ##########################################################
+    # Secret Scanning
+    ##########################################################
 
-      - name: Extract Docker Metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=staging
-            type=sha,prefix=staging-
-            type=raw,value=latest
+    - name: Run Gitleaks
+      uses: gitleaks/gitleaks-action@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and Push Docker Image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./app
-          file: ./app/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+    ##########################################################
+    # Node Setup
+    ##########################################################
 
-      - name: Verify Image
-        run: |
-          echo "Image pushed successfully."
-          echo "${{ steps.meta.outputs.tags }}"
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: app/package-lock.json
+
+    ##########################################################
+    # Install Packages
+    ##########################################################
+
+    - name: Install Dependencies
+      run: npm ci
+
+    ##########################################################
+    # ESLint
+    ##########################################################
+
+    - name: Run ESLint
+      run: npm run lint
+
+    ##########################################################
+    # npm Audit
+    ##########################################################
+
+    - name: Run npm Audit
+      run: npm audit --audit-level=high
+
+    ##########################################################
+    # Build React Application
+    ##########################################################
+
+    - name: Build React Application
+      run: npm run build
+
+    ##########################################################
+    # Docker Buildx
+    ##########################################################
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    ##########################################################
+    # Docker Login
+    ##########################################################
+
+    - name: Login to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    ##########################################################
+    # Docker Metadata
+    ##########################################################
+
+    - name: Docker Metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=raw,value=staging
+          type=sha,prefix=staging-
+
+    ##########################################################
+    # Docker Build
+    ##########################################################
+
+    - name: Build Docker Image
+      uses: docker/build-push-action@v6
+      with:
+        context: ./app
+        file: ./app/Dockerfile
+        load: true
+        tags: ${{ steps.meta.outputs.tags }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    ##########################################################
+    # Trivy Scan
+    ##########################################################
+
+    - name: Run Trivy Image Scan
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:staging
+        format: table
+        exit-code: 1
+        ignore-unfixed: true
+        severity: HIGH,CRITICAL
+
+    ##########################################################
+    # Push Image
+    ##########################################################
+
+    - name: Push Docker Image
+      uses: docker/build-push-action@v6
+      with:
+        context: ./app
+        file: ./app/Dockerfile
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    ##########################################################
+    # Success
+    ##########################################################
+
+    - name: Pipeline Summary
+      run: |
+        echo "====================================="
+        echo "React DevSecOps Pipeline Completed"
+        echo "====================================="
+        echo "Image:"
+        echo "${{ steps.meta.outputs.tags }}"
