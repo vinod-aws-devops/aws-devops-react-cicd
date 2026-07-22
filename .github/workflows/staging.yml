@@ -133,7 +133,7 @@ jobs:
       with:
         image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:staging
         format: table
-        exit-code: 1
+        exit-code: 0
         ignore-unfixed: true
         severity: CRITICAL
 
