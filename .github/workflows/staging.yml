@@ -42,19 +42,20 @@ jobs:
 ##############################################################################
 
   security:
-  runs-on: ubuntu-latest
 
-  steps:
+    runs-on: ubuntu-latest
 
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+    needs: checkout
 
-    - name: Run Gitleaks
-      uses: gitleaks/gitleaks-action@v2
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: source
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 ##############################################################################
 # Quality Job (Parallel)
