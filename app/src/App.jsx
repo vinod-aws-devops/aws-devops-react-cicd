@@ -32,7 +32,6 @@ function App() {
         <li>Docker</li>
         <li>GitHub Actions</li>
         <li>Nginx</li>
-        <li>AWS EC2</li>
       </ul>
 
       <hr />
